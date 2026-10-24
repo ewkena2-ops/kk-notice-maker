@@ -159,6 +159,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 
     <section class="card">
       <h2>Payments received</h2>
+      <div class="example" id="final-hint" hidden style="color:var(--muted)">Final payment: enter only the payment received now. Everything before it is counted as already paid.</div>
       <div id="pays" style="display:flex;flex-direction:column;gap:10px"></div>
       <button type="button" class="btn" id="add-pay">Add payment</button>
       <div class="sum">
@@ -238,9 +239,13 @@ const blank=(s,ph)=>s&&String(s).trim()?esc(s):'<span class="blank">'+ph+'</span
 function calc(){
   const total=num(S.total);
   const pays=S.payments.map(p=>({...p,cr:num(p.amount),whv:num(p.wh),amt:num(p.amount)+num(p.wh)}));
-  const paid=pays.reduce((a,p)=>a+p.amt,0);
+  const entered=pays.reduce((a,p)=>a+p.amt,0);
+  let prev=0;
+  if(S.type==='update'&&S.payments.length<2){const first=S.payments[0]||{amount:'',wh:'',details:''};S.payments=[{label:'Payment 1 – Advance',amount:first.amount,wh:'',details:''},{label:'Payment 2',amount:'',wh:'',details:''}]}
+  if(S.type==='final'){prev=r2(total-entered);if(prev<0)prev=0}
+  const paid=entered+prev;
   const bal=r2(total-paid);
-  return {total,pays,paid,bal,pct:total?paid/total*100:0,bpct:total?bal/total*100:0};
+  return {total,pays,paid,bal,prev,entered,pct:total?paid/total*100:0,bpct:total?bal/total*100:0};
 }
 
 /* ---------- the letter ---------- */
@@ -254,7 +259,7 @@ function letter(){
   const via=p=>p.details&&p.details.trim()?(p.whv?' Of this amount, '+fmtT(p.cr)+' ETB was received via '+esc(p.details)+' and '+fmtT(p.whv)+' ETB was withheld as withholding tax.':', received via '+esc(p.details)+','):'';
   const totalTxt='<b>'+fmtT(c.total)+' ETB</b> ('+words(c.total)+')';
   let body='', table='';
-  const rows=c.pays.map((p,i)=>'<tr><td>'+esc(p.label||('Payment '+(i+1)))+(p.whv?' (received '+fmt(p.cr)+' + withholding '+fmt(p.whv)+')':'')+'</td><td class="r">'+fmt(p.amt)+'</td></tr>').join('');
+  const rows=(S.type==='final'&&c.prev>0?'<tr><td>Previous Payments</td><td class="r">'+fmt(c.prev)+'</td></tr>':'')+c.pays.map((p,i)=>'<tr><td>'+esc(p.label||('Payment '+(i+1)))+(p.whv?' (received '+fmt(p.cr)+' + withholding '+fmt(p.whv)+')':'')+'</td><td class="r">'+fmt(p.amt)+'</td></tr>').join('');
   const showTable=t!=='advance'||c.pays.length>1;
   if(showTable){
     const done=t==='final'&&Math.abs(c.bal)<=1;
@@ -302,16 +307,18 @@ const FIELDS=['kk','date','client','phone','tin','scope','total','days','unit','
 function save(){try{localStorage.setItem('kk-notice-v1',JSON.stringify(S))}catch(e){}}
 function fillForm(){FIELDS.forEach(k=>{$(k).value=S[k]??''});
   document.querySelectorAll('.seg button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.type===S.type?'true':'false'));
-  renderPays();$('example-note').hidden=!isExample}
+  renderPays();$('example-note').hidden=!isExample;$('final-hint').hidden=S.type!=='final'}
 function renderPays(){
   const box=$('pays');box.innerHTML='';
   S.payments.forEach((p,i)=>{
     const el=document.createElement('div');el.className='pay';
-    el.innerHTML='<div class="pay-h"><span>Payment '+(i+1)+'</span>'+(S.payments.length>1?'<button type="button" class="btn ghost" data-del="'+i+'">Remove</button>':'')+'</div>'+
-      '<label class="f">Label in table<input id="pl'+i+'" value="'+esc(p.label)+'" placeholder="Advance"></label>'+
-      '<div class="row"><label class="f">Amount received (ETB)<input id="pa'+i+'" class="num" inputmode="decimal" value="'+esc(p.amount)+'" placeholder="0.00"></label>'+
-      '<label class="f">Withholding tax (ETB)<input id="pw'+i+'" class="num" inputmode="decimal" value="'+esc(p.wh)+'" placeholder="0"></label></div>'+
-      '<label class="f">Received via<input id="pd'+i+'" value="'+esc(p.details)+'" placeholder="Commercial Bank of Ethiopia on 9 October 2026 (Ref: FT…)"></label>';
+    const upd=S.type==='update', head=upd?(i===0?'Advance paid before':(i===S.payments.length-1?'Paid now':'Earlier payment '+(i+1))):(S.type==='final'?'Final payment received now':'Payment '+(i+1));
+    const simple=upd&&i===0&&S.payments.length>1;
+    el.innerHTML='<div class="pay-h"><span>'+head+'</span>'+(S.payments.length>1?'<button type="button" class="btn ghost" data-del="'+i+'">Remove</button>':'')+'</div>'+
+      '<label class="f"'+(simple?' hidden':'')+'>Label in table<input id="pl'+i+'" value="'+esc(p.label)+'" placeholder="Advance"></label>'+
+      '<div class="row"><label class="f">'+(simple?'Advance amount (ETB)':'Amount received (ETB)')+'<input id="pa'+i+'" class="num" inputmode="decimal" value="'+esc(p.amount)+'" placeholder="0.00"></label>'+
+      '<label class="f"'+(simple?' hidden':'')+'>Withholding tax (ETB)<input id="pw'+i+'" class="num" inputmode="decimal" value="'+esc(p.wh)+'" placeholder="0"></label></div>'+
+      '<label class="f"'+(simple?' hidden':'')+'>Received via<input id="pd'+i+'" value="'+esc(p.details)+'" placeholder="Commercial Bank of Ethiopia on 9 October 2026 (Ref: FT…)"></label>';
     box.appendChild(el);
     [['pl','label'],['pa','amount'],['pw','wh'],['pd','details']].forEach(([pre,key])=>{
       el.querySelector('#'+pre+i).addEventListener('input',e=>{S.payments[i][key]=e.target.value;changed()})});
@@ -323,8 +330,8 @@ function checks(){
   $('s-paid').textContent=fmt(c.paid);$('s-bal').textContent=fmt(c.bal);$('s-pct').textContent=c.pct.toFixed(1)+'%';
   if(!c.total)out.push(['warn','Enter the total project value from the proforma.']);
   if(c.total&&c.bal<-1)out.push(['bad','Payments are '+fmt(-c.bal)+' ETB more than the total. Check the amounts.']);
-  if(S.type==='final'&&c.total&&c.bal>1)out.push(['warn','A final payment notice, but '+fmt(c.bal)+' ETB is still unpaid.']);
-  if(S.type==='final'&&c.total&&Math.abs(c.bal)<=1)out.push(['ok','Fully paid. The notice will say so.']);
+  if(S.type==='final'&&c.total&&c.entered>c.total+1)out.push(['bad','The final payment is '+fmt(c.entered-c.total)+' ETB more than the total. Check the amount.']);
+  if(S.type==='final'&&c.total&&c.entered<=c.total+1)out.push(['ok','Previous payments counted as received: '+fmt(c.prev)+' ETB. The notice will say fully paid.']);
   if(S.type==='advance'&&c.total&&c.pct<49.9&&c.paid>0)out.push(['warn','Advance is '+c.pct.toFixed(1)+'%, below the usual 50%.']);
   if(!S.days&&S.type==='advance')out.push(['warn','Timeline is empty and will show as “___”.']);
   if(!receipts.length)out.push(['warn','No receipt attached yet.']);
@@ -337,9 +344,10 @@ FIELDS.forEach(k=>$(k).addEventListener('input',e=>{S[k]=e.target.value;changed(
 document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{
   S.type=b.dataset.type;
   if(S.type==='advance'&&S.payments.length===1&&!S.payments[0].label)S.payments[0].label='Advance';
-  if(S.type==='final'&&S.payments.length===1){S.payments.unshift({label:'Advance',amount:'',wh:'',details:''});S.payments[1].label=S.payments[1].label==='Advance'?'Final Payment':S.payments[1].label}
+  if(S.type==='update'&&S.payments.length<2){const first=S.payments[0]||{amount:'',wh:'',details:''};S.payments=[{label:'Payment 1 – Advance',amount:first.amount,wh:'',details:''},{label:'Payment 2',amount:'',wh:'',details:''}]}
+  if(S.type==='final'){const last=S.payments[S.payments.length-1]||{amount:'',wh:'',details:''};S.payments=[{...last,label:'Final Payment'}]}
   fillForm();changed()}));
-$('add-pay').addEventListener('click',()=>{S.payments.push({label:S.type==='final'?'Final Payment':'Payment '+(S.payments.length+1),amount:'',wh:'',details:''});renderPays();changed()});
+$('add-pay').addEventListener('click',()=>{if(S.type==='update'&&S.payments.length>=2){const last=S.payments.pop();last.label='Payment '+(S.payments.length+2);S.payments.push({label:'Payment '+(S.payments.length+1),amount:'',wh:'',details:''},last);renderPays();changed();return}S.payments.push({label:S.type==='final'?'Final Payment':'Payment '+(S.payments.length+1),amount:'',wh:'',details:''});renderPays();changed()});
 $('reset').addEventListener('click',()=>{S=BLANK();receipts=[];proforma=null;renderThumbs();renderPf();fillForm();changed();$('status').textContent='Cleared. Ready for a new notice.'});
 
 /* ---------- attachments ---------- */
